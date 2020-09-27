@@ -1,7 +1,9 @@
 from contextlib import contextmanager
-from dataclasses import dataclass, InitVar, astuple
+from dataclasses import dataclass, InitVar
 from datetime import date, timedelta
 import re
+from functools import reduce
+from typing import List
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -9,7 +11,7 @@ from sqlalchemy import Column, Integer, Float, String, Date
 from sqlalchemy.orm import sessionmaker
 
 
-# магия регэксп
+# магия регэксп не нужно в этой задаче
 regex = "^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w{2,3}$"
 """
 ^[a-z0-9]+ в начале шаблона одно или более вхождений символов a-z0-9
@@ -25,9 +27,8 @@ regex = "^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w{2,3}$"
 # путь к базе
 DB_PATH = "sqlite:///sochi_athletes.sqlite3"
 
-# ORM модель двух баз атлетов и юзеров
+# ORM модель двух баз: атлетов и юзеров
 Base = declarative_base()
-
 
 class Athelete(Base):
     __tablename__ = "athelete"
@@ -46,9 +47,9 @@ class Athelete(Base):
     country = Column(String)
 
     def __repr__(self):
-        return "<Athelete(age='%s', birthdate='%s', gender='%s', \
-        height='%s', name='%s', weight='%s', gold_medals='%s', \
-        silver_medals='%s', total_medals='%s',  sport='%s',  country='%s')>" % (
+        return "<Athelete(age='%s', birthdate='%s', gender='%s'," \
+        "height='%s', name='%s', weight='%s', gold_medals='%s'," \
+        "silver_medals='%s', total_medals='%s', sport='%s', country='%s')>" % (
             self.age,
             self.birthdate,
             self.gender,
@@ -71,7 +72,7 @@ class User(Base):
     last_name = Column(String)
     gender = Column(String)
     email = Column(String)
-    birthdate = Column(Date)
+    birthdate = Column(Date) # <class 'datetime.date'>
     height = Column(Float)
 
     def __repr__(self):
@@ -89,7 +90,7 @@ class User(Base):
 eng = create_engine(DB_PATH)
 
 # таблицы
-print(eng.table_names())
+#print(eng.table_names())
 
 # создание конструктора сессий
 Session = sessionmaker(bind=eng)
@@ -109,16 +110,14 @@ def session_context():
     finally:
         session.close()
 
-
 class ManagerDb:
     """
     общий доступ к базе данных
     """
 
-    def __init__(self, orm_class):
+    def __init__(self, orm_class: Base, s: Session):
         self.orm_class = orm_class
-        with session_context() as s:
-            self.s = s
+        self.s = s
 
     def __iter__(self):
         return iter(self.s.query(self.orm_class).all())
@@ -132,26 +131,42 @@ class ManagerDb:
 
 
 class UserDb(ManagerDb):
-    def __init__(self):
-        super().__init__(User)
+    def __init__(self, s: Session):
+        super().__init__(User, s)
 
     def append(self, orm_class):
         self.s.add(orm_class)
-        self.s.commit()
-        return None
 
+    def query_id(self, first_name, last_name):
+        q = self.query.filter(self.orm_class.first_name == first_name, self.orm_class.last_name == last_name)
+        if self.s.query(q.exists()).scalar():
+            return q.one()
+        else:
+            return None
 
 class AtheleteDb(ManagerDb):
-    def __init__(self):
-        super().__init__(Athelete)
+    def __init__(self, s):
+        super().__init__(Athelete, s)
 
+    def nearest_height(self, height):
+        # отфильтруем атлетов у кого не указан рост
+        items = filter(lambda x: x.height, [i for i in self])
+        # берем два значения из списка, вычитаем рост (abs абсолютное значение без знака) если разность меньше чем у предыдущего выкидываем
+        return reduce(lambda x, y: y if abs(y.height-height) < abs(x.height-height) else x, items)
+      
+    def nearest_birthdate(self, birthdate):
+        # отфильтруем атлетов у кого не указана birthdate
+        items = filter(lambda x: x.birthdate, [i for i in self])
+        # сортируем список дней рождения от более старых к более молодым атлетам
+        # берем два дня рождения из списка, у кого раньше того выкидываем
+        return reduce(lambda x, y: y if date.fromisoformat(x.birthdate) < birthdate else x, sorted(items,  key=lambda x: x.birthdate))
 
-#  дальше разбор ввода пользователя
-
+# разбор ввода пользователя:
 
 def age_calculation(birthdate: date) -> int:
     """
-    вычисление полных лет пользователя
+    вычисление полных лет пользователя. 
+    вообще не нужно в этой задаче
     """
     today = date.today()  # дата сегодня
     years = today.year - birthdate.year
@@ -167,6 +182,7 @@ def age_calculation(birthdate: date) -> int:
 def check_email(email: str) -> bool:
     """
     валидация емайл
+    вообще не нужно в этой задаче
     """
     if re.match(regex, email):
         return True
@@ -178,6 +194,7 @@ def check_email(email: str) -> bool:
 class UserInput:
     """
     парсер ввода пользователя
+    вообще не нужно в этой задаче
     """
 
     first_name: str
@@ -208,47 +225,14 @@ class UserInput:
         if not check_email(self.email):
             raise ValueError("Не корректный емайл")
         if self.height <= 0 or self.height > 2.50:
-            raise ValueError("Значение роста юзера больше нуля и меньше 2.50 м")
+            raise ValueError("Значение роста юзера должна больше нуля и меньше 2.50 м")
 
+# main функции:
 
-def main(user: UserInput) -> None:
-    record = User(
-        first_name=user.first_name,
-        last_name=user.last_name,
-        gender=user.gender,
-        email=user.email,
-        birthdate=user.birthdate,
-        height=user.height,
-    )
-    print(UserDb().append(record))
-    print("1")
-
-
-if __name__ == "__main__":
-    # q = ManagerDb(Athelete).query.filter(Athelete.gender == 'Female').all()
-    # q2 = ManagerDb(Athelete).query.filter(Athelete.age > 30).all()
-    # q3 = ManagerDb(Athelete).query.filter(Athelete.gender == 'Male', Athelete.age > 25, Athelete.gold_medals >= 2).all()
-    # print(f"Количество атлетов женщин = {len(q)}")
-    # print(f"Количество атлетов старше 30 = {len(q2)}")
-    # print(f"Количество атлетов мужчин старше 25 лет получили 2 и более золотых медали = {len(q3)}")
-    # for item in AtheleteDb():
-    #     print(item)
-
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Добавление юзера в базу данных")
-    # перечисляю аргументы
-    parser.add_argument("first_name", type=str, help="имя пользователя")
-    parser.add_argument("last_name", type=str, help="фамилия пользователя")
-    parser.add_argument("gender", type=str, help="пол пользователя")
-    parser.add_argument("email", type=str, help="email пользователя")
-    parser.add_argument(
-        "birthdate",
-        type=str,
-        help="дата рождения пользователя в формате ISO YYYY-MM-DD",
-    )
-    parser.add_argument("height", type=float, help="рост пользователя в метрах")
-    args = parser.parse_args()
+def add(args):
+    """
+    добавление пользователя
+    """
     user = UserInput(
         args.first_name,
         args.last_name,
@@ -257,7 +241,111 @@ if __name__ == "__main__":
         args.height,
         birthdate_raw=args.birthdate,
     )
-    main(user)
-    print("3")
-    for item in UserDb():
-        print(item)
+    record = User(
+        first_name=user.first_name,
+        last_name=user.last_name,
+        gender=user.gender,
+        email=user.email,
+        birthdate=user.birthdate,
+        height=user.height,
+    )
+
+    with session_context() as session:
+        UserDb(session).append(record)
+        session.flush()
+        print(f"Запись добавлена. ID = {record.id}")
+    
+
+def query_id(args):
+    """
+    запрос id пользователя
+    """
+    birthdate, height = None, None
+    with session_context() as session:
+        user = UserDb(session).query_id(args.first_name, args.last_name)
+        if user:
+            print(f'id пользователя - {user.id}')
+            birthdate = user.birthdate
+            height = user.height
+            athelete_height = AtheleteDb(session).nearest_height(height)
+            print(f"Ближайший по росту атлет {athelete_height.name}. Рост {athelete_height.height}")
+            athelete_birthdate = AtheleteDb(session).nearest_birthdate(birthdate)
+            print(f"Ближайший по возрасту атлет {athelete_birthdate.name}. День рождения {athelete_birthdate.birthdate}")
+        else: 
+            print(f"Пользователя {args.first_name} {args.last_name} не найдено")
+    
+
+
+def show_users(args):
+    # не получилось избавится от args
+    with session_context() as session:
+        for item in UserDb(session):
+            print(item)
+
+def query_athelete(args):
+    """
+    ответы на вопросы
+    """
+    with session_context() as session:
+        q1 = AtheleteDb(session).query.filter(Athelete.gender == 'Female').all()
+        q2 = AtheleteDb(session).query.filter(Athelete.age > 30).all()
+        q3 = AtheleteDb(session).query.filter(Athelete.gender == 'Male', Athelete.age > 25, Athelete.gold_medals >= 2).all()
+        print(f"Количество атлетов женщин = {len(q1)}")
+        print(f"Количество атлетов старше 30 = {len(q2)}")
+        print(f"Количество атлетов мужчин старше 25 лет получили 2 и более золотых медали = {len(q3)}")
+
+def delete_all_users(args):
+    """
+    удалить все записи в таблице user
+    """
+    with session_context() as session:
+        conn = UserDb(session)
+        for item in conn:
+            session.delete(item)
+
+if __name__ == "__main__":
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Работа с базой юзерс")
+    # субпарсер 
+    subparsers = parser.add_subparsers()
+    # субпарсер add
+    add_parser = subparsers.add_parser('add', help='добавление нового пользователя')
+    # перечисляю аргументы
+    add_parser.add_argument("first_name", type=str, help="имя пользователя")
+    add_parser.add_argument("last_name", type=str, help="фамилия пользователя")
+    add_parser.add_argument("gender", type=str, help="пол пользователя")
+    add_parser.add_argument("email", type=str, help="email пользователя")
+    add_parser.add_argument(
+        "birthdate",
+        type=str,
+        help="дата рождения пользователя в формате ISO YYYY-MM-DD",
+    )
+    add_parser.add_argument("height", type=float, help="рост пользователя в метрах")
+    # подключение функции add к субпарсеру
+    add_parser.set_defaults(func=add)
+
+     # субпарсер query_id
+    query_id_parser = subparsers.add_parser('query_id', help='запрос id по first_name и "last_name"')
+    query_id_parser.add_argument("first_name", type=str, help="имя пользователя")
+    query_id_parser.add_argument("last_name", type=str, help="фамилия пользователя")
+    query_id_parser.set_defaults(func=query_id)
+    
+    # субпарсер show
+    show_users_parser = subparsers.add_parser('show', help='список пользователей')
+    show_users_parser.set_defaults(func=show_users)
+
+     # субпарсер delete_users
+    delete_users_parser = subparsers.add_parser('delete_users', help='удалить все записи в таблице user')
+    delete_users_parser.set_defaults(func=delete_all_users)
+
+    # субпарсер query_athelete
+    query_athelete_parser = subparsers.add_parser('query_athelete', help='ответы на вопросы по домашнему заданию')
+    query_athelete_parser.set_defaults(func=query_athelete)
+
+    args = parser.parse_args()
+    if not vars(args):
+        parser.print_usage()
+    else:
+        args.func(args)
